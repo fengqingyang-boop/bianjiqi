@@ -3,26 +3,17 @@ const imagesContainer = document.getElementById('images-container');
 const statusText = document.getElementById('status-text');
 
 let insertedImages = [];
-let isModified = false;
 
 function updateStatus(text) {
-    statusText.textContent = text;
-}
-
-function setModified() {
-    if (!isModified) {
-        isModified = true;
-        window.electronAPI.notifyModified();
+    console.log('Status:', text);
+    if (statusText) {
+        statusText.textContent = text;
     }
-}
-
-function clearModified() {
-    isModified = false;
 }
 
 function getDocumentContent() {
     return {
-        text: editor.value,
+        text: editor ? editor.value : '',
         images: insertedImages.map(img => ({
             path: img.path,
             name: img.name
@@ -30,19 +21,32 @@ function getDocumentContent() {
     };
 }
 
+function setDocumentContent(content, filePath) {
+    if (editor) {
+        editor.value = content || '';
+    }
+    insertedImages = [];
+    renderImages();
+    
+    if (filePath) {
+        updateStatus('已打开: ' + filePath);
+    } else {
+        updateStatus('新文档');
+    }
+}
+
 async function addImage(imagePath) {
-    const imageName = window.electronAPI.getFileName(imagePath);
+    console.log('Adding image:', imagePath);
     
     const imageInfo = {
         id: Date.now(),
         path: imagePath,
-        name: imageName
+        name: imagePath.split('\\').pop().split('/').pop()
     };
     
     insertedImages.push(imageInfo);
     renderImages();
-    setModified();
-    updateStatus('已插入图片: ' + imageName);
+    updateStatus('已插入图片: ' + imageInfo.name);
 }
 
 function removeImage(id) {
@@ -50,12 +54,18 @@ function removeImage(id) {
     if (index > -1) {
         const removedImage = insertedImages.splice(index, 1)[0];
         renderImages();
-        setModified();
         updateStatus('已移除图片: ' + removedImage.name);
     }
 }
 
 function renderImages() {
+    console.log('Rendering images, count:', insertedImages.length);
+    
+    if (!imagesContainer) {
+        console.log('imagesContainer not found');
+        return;
+    }
+    
     if (insertedImages.length === 0) {
         imagesContainer.innerHTML = '';
         imagesContainer.classList.remove('has-images');
@@ -70,8 +80,14 @@ function renderImages() {
     insertedImages.forEach(image => {
         const imageItem = document.createElement('div');
         imageItem.className = 'image-item';
+        
+        const encodedPath = encodeURI(image.path).replace(/\(/g, '%28').replace(/\)/g, '%29');
+        const imageSrc = 'file://' + encodedPath;
+        
+        console.log('Image source:', imageSrc);
+        
         imageItem.innerHTML = `
-            <img class="image-preview" src="file://${encodeURI(image.path).replace(/\(/g, '%28').replace(/\)/g, '%29')}" alt="${image.name}">
+            <img class="image-preview" src="${imageSrc}" alt="${image.name}" onerror="console.error('Failed to load image:', this.src)">
             <div class="image-info">
                 <div class="image-name" title="${image.name}">${image.name}</div>
                 <div class="image-path" title="${image.path}">${image.path}</div>
@@ -93,183 +109,215 @@ function renderImages() {
     });
 }
 
-function setDocumentContent(content, filePath) {
-    editor.value = content || '';
-    clearModified();
-    insertedImages = [];
-    renderImages();
-    
-    if (filePath) {
-        updateStatus('已打开: ' + window.electronAPI.getFileName(filePath));
-    } else {
-        updateStatus('新文档');
-    }
-}
-
-async function sendContent() {
-    const content = getDocumentContent();
-    window.electronAPI.sendContent(content.text, content.images);
-    clearModified();
-    updateStatus('已保存');
-}
-
-async function handleNewDocument() {
-    if (isModified || insertedImages.length > 0) {
-        const result = await window.electronAPI.newDocument();
-        if (result.success) {
-            setDocumentContent('');
-        }
-    } else {
-        setDocumentContent('');
-    }
-}
-
 async function handleOpenFile() {
-    const result = await window.electronAPI.dialogOpenFile();
-    if (result.success) {
-        setDocumentContent(result.content, result.filePath);
-    } else if (result.error) {
-        updateStatus('打开失败: ' + result.error);
+    console.log('handleOpenFile called');
+    try {
+        const result = await window.electronAPI.openFile();
+        console.log('openFile result:', result);
+        if (result.success) {
+            setDocumentContent(result.content, result.filePath);
+        } else if (result.error) {
+            updateStatus('打开失败: ' + result.error);
+        }
+    } catch (error) {
+        console.error('handleOpenFile error:', error);
+        updateStatus('打开失败: ' + error.message);
     }
 }
 
 async function handleSaveFile() {
-    const content = getDocumentContent();
-    const result = await window.electronAPI.dialogSaveFile(content.text, content.images);
-    if (result.success) {
-        clearModified();
-        updateStatus('已保存: ' + window.electronAPI.getFileName(result.filePath));
-    } else if (result.error) {
-        updateStatus('保存失败: ' + result.error);
+    console.log('handleSaveFile called');
+    try {
+        const content = getDocumentContent();
+        const result = await window.electronAPI.saveFile(content.text, content.images, true);
+        console.log('saveFile result:', result);
+        if (result.success) {
+            updateStatus('已保存: ' + result.filePath);
+        } else if (result.error) {
+            updateStatus('保存失败: ' + result.error);
+        }
+    } catch (error) {
+        console.error('handleSaveFile error:', error);
+        updateStatus('保存失败: ' + error.message);
     }
 }
 
 async function handleSaveAsFile() {
-    const content = getDocumentContent();
-    const result = await window.electronAPI.dialogSaveAsFile(content.text, content.images);
-    if (result.success) {
-        clearModified();
-        updateStatus('已另存为: ' + window.electronAPI.getFileName(result.filePath));
-    } else if (result.error) {
-        updateStatus('保存失败: ' + result.error);
+    console.log('handleSaveAsFile called');
+    try {
+        const content = getDocumentContent();
+        const result = await window.electronAPI.saveFile(content.text, content.images, false);
+        console.log('saveAsFile result:', result);
+        if (result.success) {
+            updateStatus('已另存为: ' + result.filePath);
+        } else if (result.error) {
+            updateStatus('保存失败: ' + result.error);
+        }
+    } catch (error) {
+        console.error('handleSaveAsFile error:', error);
+        updateStatus('保存失败: ' + error.message);
     }
 }
 
 async function handleInsertImage() {
-    const result = await window.electronAPI.dialogInsertImage();
-    if (result.success) {
-        await addImage(result.imagePath);
+    console.log('handleInsertImage called');
+    try {
+        const result = await window.electronAPI.insertImage();
+        console.log('insertImage result:', result);
+        if (result.success) {
+            await addImage(result.imagePath);
+        }
+    } catch (error) {
+        console.error('handleInsertImage error:', error);
+        updateStatus('插入图片失败: ' + error.message);
     }
 }
 
-function handleUndo() {
-    document.execCommand('undo');
-    editor.focus();
-}
-
-function handleRedo() {
-    document.execCommand('redo');
-    editor.focus();
+function handleNewDocument() {
+    console.log('handleNewDocument called');
+    setDocumentContent('');
 }
 
 function handleCut() {
-    const start = editor.selectionStart;
-    const end = editor.selectionEnd;
-    if (start !== end) {
-        const selectedText = editor.value.substring(start, end);
-        navigator.clipboard.writeText(selectedText).then(() => {
-            editor.value = editor.value.substring(0, start) + editor.value.substring(end);
-            editor.selectionStart = editor.selectionEnd = start;
-            setModified();
-            updateStatus('已剪切');
-        });
+    console.log('handleCut called');
+    if (editor) {
+        const start = editor.selectionStart;
+        const end = editor.selectionEnd;
+        if (start !== end) {
+            const selectedText = editor.value.substring(start, end);
+            navigator.clipboard.writeText(selectedText).then(() => {
+                editor.value = editor.value.substring(0, start) + editor.value.substring(end);
+                editor.selectionStart = editor.selectionEnd = start;
+                updateStatus('已剪切');
+            }).catch(err => {
+                console.error('Cut error:', err);
+            });
+        }
     }
 }
 
 function handleCopy() {
-    const start = editor.selectionStart;
-    const end = editor.selectionEnd;
-    if (start !== end) {
-        const selectedText = editor.value.substring(start, end);
-        navigator.clipboard.writeText(selectedText).then(() => {
-            updateStatus('已复制');
-        });
+    console.log('handleCopy called');
+    if (editor) {
+        const start = editor.selectionStart;
+        const end = editor.selectionEnd;
+        if (start !== end) {
+            const selectedText = editor.value.substring(start, end);
+            navigator.clipboard.writeText(selectedText).then(() => {
+                updateStatus('已复制');
+            }).catch(err => {
+                console.error('Copy error:', err);
+            });
+        }
     }
 }
 
 function handlePaste() {
-    navigator.clipboard.readText().then(text => {
-        const start = editor.selectionStart;
-        const end = editor.selectionEnd;
-        editor.value = editor.value.substring(0, start) + text + editor.value.substring(end);
-        editor.selectionStart = editor.selectionEnd = start + text.length;
-        setModified();
-        updateStatus('已粘贴');
-    });
+    console.log('handlePaste called');
+    if (editor) {
+        navigator.clipboard.readText().then(text => {
+            const start = editor.selectionStart;
+            const end = editor.selectionEnd;
+            editor.value = editor.value.substring(0, start) + text + editor.value.substring(end);
+            editor.selectionStart = editor.selectionEnd = start + text.length;
+            updateStatus('已粘贴');
+        }).catch(err => {
+            console.error('Paste error:', err);
+        });
+    }
 }
 
-document.getElementById('btn-new').addEventListener('click', handleNewDocument);
-document.getElementById('btn-open').addEventListener('click', handleOpenFile);
-document.getElementById('btn-save').addEventListener('click', handleSaveFile);
-document.getElementById('btn-undo').addEventListener('click', handleUndo);
-document.getElementById('btn-redo').addEventListener('click', handleRedo);
-document.getElementById('btn-cut').addEventListener('click', handleCut);
-document.getElementById('btn-copy').addEventListener('click', handleCopy);
-document.getElementById('btn-paste').addEventListener('click', handlePaste);
-document.getElementById('btn-image').addEventListener('click', handleInsertImage);
-
-editor.addEventListener('input', () => {
-    setModified();
-});
-
-editor.addEventListener('keydown', (e) => {
-    if (e.ctrlKey && e.key === 's') {
-        e.preventDefault();
+function initEventListeners() {
+    console.log('Initializing event listeners');
+    
+    const btnNew = document.getElementById('btn-new');
+    const btnOpen = document.getElementById('btn-open');
+    const btnSave = document.getElementById('btn-save');
+    const btnUndo = document.getElementById('btn-undo');
+    const btnRedo = document.getElementById('btn-redo');
+    const btnCut = document.getElementById('btn-cut');
+    const btnCopy = document.getElementById('btn-copy');
+    const btnPaste = document.getElementById('btn-paste');
+    const btnImage = document.getElementById('btn-image');
+    
+    console.log('btnNew:', btnNew);
+    console.log('btnOpen:', btnOpen);
+    console.log('btnSave:', btnSave);
+    console.log('btnImage:', btnImage);
+    
+    if (btnNew) btnNew.addEventListener('click', handleNewDocument);
+    if (btnOpen) btnOpen.addEventListener('click', handleOpenFile);
+    if (btnSave) btnSave.addEventListener('click', handleSaveFile);
+    if (btnUndo) btnUndo.addEventListener('click', () => { document.execCommand('undo'); });
+    if (btnRedo) btnRedo.addEventListener('click', () => { document.execCommand('redo'); });
+    if (btnCut) btnCut.addEventListener('click', handleCut);
+    if (btnCopy) btnCopy.addEventListener('click', handleCopy);
+    if (btnPaste) btnPaste.addEventListener('click', handlePaste);
+    if (btnImage) btnImage.addEventListener('click', handleInsertImage);
+    
+    console.log('Setting up IPC listeners');
+    
+    window.electronAPI.onMenuNew(() => {
+        console.log('IPC: onMenuNew');
+        handleNewDocument();
+    });
+    
+    window.electronAPI.onMenuSave(() => {
+        console.log('IPC: onMenuSave');
         handleSaveFile();
-    }
-});
-
-window.electronAPI.onDocumentNew(() => {
-    setDocumentContent('');
-});
-
-window.electronAPI.onDocumentOpen((content, filePath) => {
-    setDocumentContent(content, filePath);
-});
-
-window.electronAPI.onGetContent((action) => {
-    if (action === 'save') {
-        sendContent();
-    }
-});
-
-window.electronAPI.onInsertImage((imagePath) => {
-    addImage(imagePath);
-});
-
-document.addEventListener('keydown', (e) => {
-    if (e.ctrlKey) {
-        switch (e.key.toLowerCase()) {
-            case 'n':
-                e.preventDefault();
-                handleNewDocument();
-                break;
-            case 'o':
-                e.preventDefault();
-                handleOpenFile();
-                break;
-            case 's':
-                if (e.shiftKey) {
+    });
+    
+    window.electronAPI.onMenuSaveAs(() => {
+        console.log('IPC: onMenuSaveAs');
+        handleSaveAsFile();
+    });
+    
+    window.electronAPI.onFileOpened((content, filePath) => {
+        console.log('IPC: onFileOpened', filePath);
+        setDocumentContent(content, filePath);
+    });
+    
+    window.electronAPI.onImageInserted((imagePath) => {
+        console.log('IPC: onImageInserted', imagePath);
+        addImage(imagePath);
+    });
+    
+    document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey) {
+            console.log('Keydown with Ctrl:', e.key);
+            switch (e.key.toLowerCase()) {
+                case 'n':
                     e.preventDefault();
-                    handleSaveAsFile();
-                }
-                break;
-            case 'i':
-                e.preventDefault();
-                handleInsertImage();
-                break;
+                    handleNewDocument();
+                    break;
+                case 'o':
+                    e.preventDefault();
+                    handleOpenFile();
+                    break;
+                case 's':
+                    e.preventDefault();
+                    if (e.shiftKey) {
+                        handleSaveAsFile();
+                    } else {
+                        handleSaveFile();
+                    }
+                    break;
+                case 'i':
+                    e.preventDefault();
+                    handleInsertImage();
+                    break;
+            }
         }
-    }
-});
+    });
+    
+    updateStatus('就绪 - 欢迎使用文档编辑器');
+    console.log('Event listeners initialized');
+}
 
-updateStatus('就绪 - 欢迎使用文档编辑器');
+console.log('renderer.js loaded');
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initEventListeners);
+} else {
+    initEventListeners();
+}
