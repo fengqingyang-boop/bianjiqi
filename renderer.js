@@ -20,7 +20,17 @@ function clearModified() {
     isModified = false;
 }
 
-function addImage(imagePath) {
+function getDocumentContent() {
+    return {
+        text: editor.value,
+        images: insertedImages.map(img => ({
+            path: img.path,
+            name: img.name
+        }))
+    };
+}
+
+async function addImage(imagePath) {
     const imageName = window.electronAPI.getFileName(imagePath);
     
     const imageInfo = {
@@ -61,7 +71,7 @@ function renderImages() {
         const imageItem = document.createElement('div');
         imageItem.className = 'image-item';
         imageItem.innerHTML = `
-            <img class="image-preview" src="file://${encodeURI(image.path)}" alt="${image.name}">
+            <img class="image-preview" src="file://${encodeURI(image.path).replace(/\(/g, '%28').replace(/\)/g, '%29')}" alt="${image.name}">
             <div class="image-info">
                 <div class="image-name" title="${image.name}">${image.name}</div>
                 <div class="image-path" title="${image.path}">${image.path}</div>
@@ -83,16 +93,6 @@ function renderImages() {
     });
 }
 
-function getDocumentContent() {
-    return {
-        text: editor.value,
-        images: insertedImages.map(img => ({
-            path: img.path,
-            name: img.name
-        }))
-    };
-}
-
 function setDocumentContent(content, filePath) {
     editor.value = content || '';
     clearModified();
@@ -106,52 +106,117 @@ function setDocumentContent(content, filePath) {
     }
 }
 
-function sendContent() {
+async function sendContent() {
     const content = getDocumentContent();
     window.electronAPI.sendContent(content.text, content.images);
     clearModified();
     updateStatus('已保存');
 }
 
-document.getElementById('btn-new').addEventListener('click', () => {
+async function handleNewDocument() {
     if (isModified || insertedImages.length > 0) {
-        updateStatus('请使用菜单中的新建功能，以确保未保存的更改得到处理');
+        const result = await window.electronAPI.newDocument();
+        if (result.success) {
+            setDocumentContent('');
+        }
     } else {
         setDocumentContent('');
     }
-});
+}
 
-document.getElementById('btn-open').addEventListener('click', () => {
-    updateStatus('请使用菜单中的打开功能 (Ctrl+O)');
-});
+async function handleOpenFile() {
+    const result = await window.electronAPI.dialogOpenFile();
+    if (result.success) {
+        setDocumentContent(result.content, result.filePath);
+    } else if (result.error) {
+        updateStatus('打开失败: ' + result.error);
+    }
+}
 
-document.getElementById('btn-save').addEventListener('click', () => {
-    updateStatus('请使用菜单中的保存功能 (Ctrl+S)');
-});
+async function handleSaveFile() {
+    const content = getDocumentContent();
+    const result = await window.electronAPI.dialogSaveFile(content.text, content.images);
+    if (result.success) {
+        clearModified();
+        updateStatus('已保存: ' + window.electronAPI.getFileName(result.filePath));
+    } else if (result.error) {
+        updateStatus('保存失败: ' + result.error);
+    }
+}
 
-document.getElementById('btn-undo').addEventListener('click', () => {
+async function handleSaveAsFile() {
+    const content = getDocumentContent();
+    const result = await window.electronAPI.dialogSaveAsFile(content.text, content.images);
+    if (result.success) {
+        clearModified();
+        updateStatus('已另存为: ' + window.electronAPI.getFileName(result.filePath));
+    } else if (result.error) {
+        updateStatus('保存失败: ' + result.error);
+    }
+}
+
+async function handleInsertImage() {
+    const result = await window.electronAPI.dialogInsertImage();
+    if (result.success) {
+        await addImage(result.imagePath);
+    }
+}
+
+function handleUndo() {
     document.execCommand('undo');
-});
+    editor.focus();
+}
 
-document.getElementById('btn-redo').addEventListener('click', () => {
+function handleRedo() {
     document.execCommand('redo');
-});
+    editor.focus();
+}
 
-document.getElementById('btn-cut').addEventListener('click', () => {
-    document.execCommand('cut');
-});
+function handleCut() {
+    const start = editor.selectionStart;
+    const end = editor.selectionEnd;
+    if (start !== end) {
+        const selectedText = editor.value.substring(start, end);
+        navigator.clipboard.writeText(selectedText).then(() => {
+            editor.value = editor.value.substring(0, start) + editor.value.substring(end);
+            editor.selectionStart = editor.selectionEnd = start;
+            setModified();
+            updateStatus('已剪切');
+        });
+    }
+}
 
-document.getElementById('btn-copy').addEventListener('click', () => {
-    document.execCommand('copy');
-});
+function handleCopy() {
+    const start = editor.selectionStart;
+    const end = editor.selectionEnd;
+    if (start !== end) {
+        const selectedText = editor.value.substring(start, end);
+        navigator.clipboard.writeText(selectedText).then(() => {
+            updateStatus('已复制');
+        });
+    }
+}
 
-document.getElementById('btn-paste').addEventListener('click', () => {
-    document.execCommand('paste');
-});
+function handlePaste() {
+    navigator.clipboard.readText().then(text => {
+        const start = editor.selectionStart;
+        const end = editor.selectionEnd;
+        editor.value = editor.value.substring(0, start) + text + editor.value.substring(end);
+        editor.selectionStart = editor.selectionEnd = start + text.length;
+        setModified();
+        updateStatus('已粘贴');
+    });
+}
 
-document.getElementById('btn-image').addEventListener('click', () => {
-    updateStatus('请使用菜单中的插入图片功能 (Ctrl+I)');
-});
+document.getElementById('btn-new').addEventListener('click', handleNewDocument);
+document.getElementById('btn-open').addEventListener('click', handleOpenFile);
+document.getElementById('btn-save').addEventListener('click', handleSaveFile);
+document.getElementById('btn-undo').addEventListener('click', handleUndo);
+document.getElementById('btn-redo').addEventListener('click', handleRedo);
+document.getElementById('btn-cut').addEventListener('click', handleCut);
+document.getElementById('btn-copy').addEventListener('click', handleCopy);
+document.getElementById('btn-paste').addEventListener('click', handlePaste);
+document.getElementById('btn-image').addEventListener('click', handleInsertImage);
 
 editor.addEventListener('input', () => {
     setModified();
@@ -160,7 +225,7 @@ editor.addEventListener('input', () => {
 editor.addEventListener('keydown', (e) => {
     if (e.ctrlKey && e.key === 's') {
         e.preventDefault();
-        updateStatus('使用菜单保存 (Ctrl+S)');
+        handleSaveFile();
     }
 });
 
@@ -172,12 +237,39 @@ window.electronAPI.onDocumentOpen((content, filePath) => {
     setDocumentContent(content, filePath);
 });
 
-window.electronAPI.onGetContent(() => {
-    sendContent();
+window.electronAPI.onGetContent((action) => {
+    if (action === 'save') {
+        sendContent();
+    }
 });
 
 window.electronAPI.onInsertImage((imagePath) => {
     addImage(imagePath);
+});
+
+document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey) {
+        switch (e.key.toLowerCase()) {
+            case 'n':
+                e.preventDefault();
+                handleNewDocument();
+                break;
+            case 'o':
+                e.preventDefault();
+                handleOpenFile();
+                break;
+            case 's':
+                if (e.shiftKey) {
+                    e.preventDefault();
+                    handleSaveAsFile();
+                }
+                break;
+            case 'i':
+                e.preventDefault();
+                handleInsertImage();
+                break;
+        }
+    }
 });
 
 updateStatus('就绪 - 欢迎使用文档编辑器');

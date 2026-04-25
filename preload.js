@@ -11,7 +11,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
         });
     },
     onGetContent: (callback) => {
-        ipcRenderer.on('document:getContent', callback);
+        ipcRenderer.on('document:getContent', (event, action) => {
+            callback(action);
+        });
     },
     onInsertImage: (callback) => {
         ipcRenderer.on('image:insert', (event, imagePath) => {
@@ -26,5 +28,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
     getFileName: (filePath) => {
         return path.basename(filePath);
+    },
+    dialogOpenFile: async () => {
+        return await ipcRenderer.invoke('dialog:openFile');
+    },
+    dialogSaveFile: async (content, images) => {
+        return await ipcRenderer.invoke('dialog:saveFile', content, images);
+    },
+    dialogSaveAsFile: async (content, images) => {
+        return await ipcRenderer.invoke('dialog:saveAsFile', content, images);
+    },
+    dialogInsertImage: async () => {
+        return await ipcRenderer.invoke('dialog:insertImage');
+    },
+    newDocument: async () => {
+        return await ipcRenderer.invoke('document:new');
+    },
+    getCurrentFilePath: async () => {
+        return await ipcRenderer.invoke('get:currentFilePath');
+    },
+    removeAllListeners: (channel) => {
+        ipcRenderer.removeAllListeners(channel);
     }
 });

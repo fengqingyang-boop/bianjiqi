@@ -27,35 +27,28 @@ function createWindow() {
                     label: '新建',
                     accelerator: 'Ctrl+N',
                     click: () => {
-                        checkUnsavedChanges(() => {
-                            currentFilePath = null;
-                            isModified = false;
-                            mainWindow.webContents.send('document:new');
-                            updateTitle();
-                        });
+                        newDocument();
                     }
                 },
                 {
                     label: '打开',
                     accelerator: 'Ctrl+O',
                     click: () => {
-                        checkUnsavedChanges(() => {
-                            openFile();
-                        });
+                        openFileDialog();
                     }
                 },
                 {
                     label: '保存',
                     accelerator: 'Ctrl+S',
                     click: () => {
-                        saveFile();
+                        saveDocument();
                     }
                 },
                 {
                     label: '另存为',
                     accelerator: 'Ctrl+Shift+S',
                     click: () => {
-                        saveFileAs();
+                        saveAsDialog();
                     }
                 },
                 { type: 'separator' },
@@ -63,7 +56,7 @@ function createWindow() {
                     label: '插入图片',
                     accelerator: 'Ctrl+I',
                     click: () => {
-                        insertImage();
+                        insertImageDialog();
                     }
                 },
                 { type: 'separator' },
@@ -127,12 +120,10 @@ function createWindow() {
     Menu.setApplicationMenu(menu);
 
     mainWindow.on('close', (e) => {
-        if (isModified) {
-            e.preventDefault();
-            checkUnsavedChanges(() => {
-                mainWindow.destroy();
-            });
-        }
+        e.preventDefault();
+        checkUnsavedChanges(() => {
+            mainWindow.destroy();
+        });
     });
 }
 
@@ -145,6 +136,15 @@ function updateTitle() {
         title = '*' + title;
     }
     mainWindow.setTitle(title);
+}
+
+function newDocument() {
+    checkUnsavedChanges(() => {
+        currentFilePath = null;
+        isModified = false;
+        mainWindow.webContents.send('document:new');
+        updateTitle();
+    });
 }
 
 function checkUnsavedChanges(callback) {
@@ -160,9 +160,9 @@ function checkUnsavedChanges(callback) {
 
         if (result === 0) {
             if (currentFilePath) {
-                mainWindow.webContents.send('document:getContent');
+                mainWindow.webContents.send('document:getContent', 'save');
             } else {
-                saveFileAs();
+                saveAsDialog();
             }
         } else if (result === 1) {
             callback();
@@ -172,37 +172,39 @@ function checkUnsavedChanges(callback) {
     }
 }
 
-function openFile() {
-    const files = dialog.showOpenDialogSync(mainWindow, {
-        properties: ['openFile'],
-        filters: [
-            { name: '文本文档', extensions: ['txt'] },
-            { name: '所有文件', extensions: ['*'] }
-        ]
-    });
+function openFileDialog() {
+    checkUnsavedChanges(() => {
+        const files = dialog.showOpenDialogSync(mainWindow, {
+            properties: ['openFile'],
+            filters: [
+                { name: '文本文档', extensions: ['txt'] },
+                { name: '所有文件', extensions: ['*'] }
+            ]
+        });
 
-    if (files && files.length > 0) {
-        try {
-            const content = fs.readFileSync(files[0], 'utf-8');
-            currentFilePath = files[0];
-            isModified = false;
-            mainWindow.webContents.send('document:open', content, files[0]);
-            updateTitle();
-        } catch (error) {
-            dialog.showErrorBox('错误', '无法打开文件: ' + error.message);
+        if (files && files.length > 0) {
+            try {
+                const content = fs.readFileSync(files[0], 'utf-8');
+                currentFilePath = files[0];
+                isModified = false;
+                mainWindow.webContents.send('document:open', content, files[0]);
+                updateTitle();
+            } catch (error) {
+                dialog.showErrorBox('错误', '无法打开文件: ' + error.message);
+            }
         }
-    }
+    });
 }
 
-function saveFile() {
+function saveDocument() {
     if (currentFilePath) {
-        mainWindow.webContents.send('document:getContent');
+        mainWindow.webContents.send('document:getContent', 'save');
     } else {
-        saveFileAs();
+        saveAsDialog();
     }
 }
 
-function saveFileAs() {
+function saveAsDialog() {
     const file = dialog.showSaveDialogSync(mainWindow, {
         filters: [
             { name: '文本文档', extensions: ['txt'] },
@@ -212,11 +214,11 @@ function saveFileAs() {
 
     if (file) {
         currentFilePath = file;
-        mainWindow.webContents.send('document:getContent');
+        mainWindow.webContents.send('document:getContent', 'save');
     }
 }
 
-function insertImage() {
+function insertImageDialog() {
     const files = dialog.showOpenDialogSync(mainWindow, {
         properties: ['openFile'],
         filters: [
@@ -245,6 +247,111 @@ app.on('window-all-closed', () => {
     }
 });
 
+ipcMain.handle('dialog:openFile', () => {
+    return new Promise((resolve) => {
+        checkUnsavedChanges(() => {
+            const files = dialog.showOpenDialogSync(mainWindow, {
+                properties: ['openFile'],
+                filters: [
+                    { name: '文本文档', extensions: ['txt'] },
+                    { name: '所有文件', extensions: ['*'] }
+                ]
+            });
+
+            if (files && files.length > 0) {
+                try {
+                    const content = fs.readFileSync(files[0], 'utf-8');
+                    currentFilePath = files[0];
+                    isModified = false;
+                    updateTitle();
+                    resolve({ success: true, content, filePath: files[0] });
+                } catch (error) {
+                    resolve({ success: false, error: error.message });
+                }
+            } else {
+                resolve({ success: false, cancelled: true });
+            }
+        });
+    });
+});
+
+ipcMain.handle('dialog:saveFile', async (event, content, images) => {
+    if (currentFilePath) {
+        return saveToFile(currentFilePath, content, images);
+    } else {
+        const file = dialog.showSaveDialogSync(mainWindow, {
+            filters: [
+                { name: '文本文档', extensions: ['txt'] },
+                { name: '所有文件', extensions: ['*'] }
+            ]
+        });
+
+        if (file) {
+            currentFilePath = file;
+            return saveToFile(file, content, images);
+        }
+        return { success: false, cancelled: true };
+    }
+});
+
+ipcMain.handle('dialog:saveAsFile', async (event, content, images) => {
+    const file = dialog.showSaveDialogSync(mainWindow, {
+        filters: [
+            { name: '文本文档', extensions: ['txt'] },
+            { name: '所有文件', extensions: ['*'] }
+        ]
+    });
+
+    if (file) {
+        currentFilePath = file;
+        return saveToFile(file, content, images);
+    }
+    return { success: false, cancelled: true };
+});
+
+function saveToFile(filePath, content, images) {
+    try {
+        let textContent = content;
+        if (images && images.length > 0) {
+            textContent += '\n\n--- 插入的图片 ---\n';
+            images.forEach((img, index) => {
+                textContent += `[图片${index + 1}]: ${img.path}\n`;
+            });
+        }
+        fs.writeFileSync(filePath, textContent, 'utf-8');
+        isModified = false;
+        updateTitle();
+        return { success: true, filePath };
+    } catch (error) {
+        return { success: false, error: error.message };
+    }
+}
+
+ipcMain.handle('dialog:insertImage', () => {
+    const files = dialog.showOpenDialogSync(mainWindow, {
+        properties: ['openFile'],
+        filters: [
+            { name: '图片文件', extensions: ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'] }
+        ]
+    });
+
+    if (files && files.length > 0) {
+        return { success: true, imagePath: files[0] };
+    }
+    return { success: false, cancelled: true };
+});
+
+ipcMain.handle('document:new', () => {
+    return new Promise((resolve) => {
+        checkUnsavedChanges(() => {
+            currentFilePath = null;
+            isModified = false;
+            updateTitle();
+            resolve({ success: true });
+        });
+    });
+});
+
 ipcMain.on('document:content', (event, content, images) => {
     if (currentFilePath) {
         try {
@@ -267,4 +374,8 @@ ipcMain.on('document:content', (event, content, images) => {
 ipcMain.on('document:modified', () => {
     isModified = true;
     updateTitle();
+});
+
+ipcMain.handle('get:currentFilePath', () => {
+    return currentFilePath;
 });
